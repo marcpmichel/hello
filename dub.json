@@ -1,0 +1,9 @@
+{
+	"authors": [
+		"Marc Michel"
+	],
+	"copyright": "Copyright © 2025, Marc Michel",
+	"description": "A minimal D application.",
+	"license": "proprietary",
+	"name": "hello"
+}
