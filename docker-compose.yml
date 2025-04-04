@@ -1,0 +1,15 @@
+
+services:
+  dmd-build:
+    image: dlanguage/dmd
+    volumes:
+      - .:/src
+    command: dmd build
+
+  dmd-test:
+    image: dlanguage/dmd
+    volumes:
+      - .:src
+    command: dmd test
+
+
