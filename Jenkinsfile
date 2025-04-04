@@ -5,13 +5,13 @@ pipeline {
 	stages {
 		state('build') {
 			steps {
-				docker run --rm -t -v .:/src dlanguage/dmd:latest dub build
+				sh 'docker run --rm -t -v .:/src dlanguage/dmd:latest dub build'
 			}		
 		}
 
 		state('test') {
 			steps {
-				docker run --rm -t -v .:/src dlanguage/dmd:latest dub test
+				sh 'docker run --rm -t -v .:/src dlanguage/dmd:latest dub test'
 			}		
 		}
 
