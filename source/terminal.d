@@ -706,7 +706,7 @@ public KeyPress getKeyPress() {
                 KeyPress press;
                 KEY_EVENT_RECORD ker = ir.Event.KeyEvent;
                 
-                press.character = ker.uChar.UnicodeChar;
+                press.character = cast(char)ker.uChar.UnicodeChar;
                 press.modifiers = KeyModifier.None;
 
                 if (ker.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) {
