@@ -1,13 +1,13 @@
 module app;
 
 import std.stdio;
-import std.string : format;
+import std.string : format, strip;
 import terminal; // Our new module
 
 void main() {
     // Ensure all output is flushed immediately.
     // This is generally good for interactive terminal applications.
-    stdout.settings.autoflush = true;
+    // stdout.settings.autoflush = true;
 
     // Use scope(exit) to ensure colors are reset and cursor is moved to a clean position.
     // getKeyPress() in terminal.d already handles its own raw mode cleanup.

@@ -57,7 +57,7 @@ version (Posix) {
     private enum INVALID_COLOR_MAP = ushort.max;
 
     private WORD mapXterm256ToWindows16(ubyte index) {
-        final switch (index) {
+        switch (index) {
             case 0: return 0;                                  
             case 1: return FOREGROUND_RED;                     
             case 2: return FOREGROUND_GREEN;                   
@@ -589,7 +589,7 @@ public KeyPress getKeyPress() {
 
             if (seqBuf[1] == '[') { 
                 if (seqLen == 3) { 
-                    final switch(seqBuf[2]) {
+                    switch(seqBuf[2]) {
                         case 'A': press.key = Key.ArrowUp; return press;
                         case 'B': press.key = Key.ArrowDown; return press;
                         case 'C': press.key = Key.ArrowRight; return press;
@@ -617,7 +617,7 @@ public KeyPress getKeyPress() {
                              try { param1 = to!ubyte(numStr); } catch (Exception e) { }
                         }
                     }
-                    final switch (param1) {
+                    switch (param1) {
                         case 1: press.key = Key.Home; return press; 
                         case 2: press.key = Key.Insert; return press;
                         case 3: press.key = Key.Delete; return press;
@@ -644,7 +644,7 @@ public KeyPress getKeyPress() {
 
             } else if (seqBuf[1] == 'O') { 
                  if (seqLen == 3) {
-                    final switch(seqBuf[2]) {
+                    switch(seqBuf[2]) {
                         case 'P': press.key = Key.F1; return press;
                         case 'Q': press.key = Key.F2; return press;
                         case 'R': press.key = Key.F3; return press;
@@ -719,7 +719,7 @@ public KeyPress getKeyPress() {
                     press.modifiers |= KeyModifier.Shift;
                 }
 
-                final switch (ker.wVirtualKeyCode) {
+                switch (ker.wVirtualKeyCode) {
                     case VK_RETURN: press.key = Key.Enter; press.character = '\n'; break;
                     case VK_ESCAPE: press.key = Key.Escape; break;
                     case VK_BACK:   press.key = Key.Backspace; break;
