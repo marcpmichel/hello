@@ -36,6 +36,25 @@ struct KeyPress {
     KeyModifier modifiers;
 }
 
+/// Enum representing the 16 standard ANSI colors.
+public enum AnsiColor : ubyte {
+    Black,          // 0
+    Red,            // 1
+    Green,          // 2
+    Yellow,         // 3
+    Blue,           // 4
+    Magenta,        // 5
+    Cyan,           // 6
+    White,          // 7
+    BrightBlack,    // 8 (also known as Gray)
+    BrightRed,      // 9
+    BrightGreen,    // 10
+    BrightYellow,   // 11
+    BrightBlue,     // 12
+    BrightMagenta,  // 13
+    BrightCyan,     // 14
+    BrightWhite     // 15
+}
 
 version (Posix) {
     import core.sys.posix.sys.ioctl;
@@ -300,6 +319,60 @@ public void clearScreen() {
 
         // Move the cursor to the top-left corner
         SetConsoleCursorPosition(hConsole, coordScreen);
+    }
+    else {
+        // Unsupported platform
+    }
+}
+
+/**
+ * Sets the terminal's background color using one of the 16 standard ANSI colors.
+ * Params:
+ *   color = The AnsiColor enum value to set.
+ */
+public void setAnsiBackgroundColor(AnsiColor color) {
+    version (Posix) {
+        if (!isatty(STDOUT_FILENO)) return;
+        ubyte code;
+        if (color >= AnsiColor.Black && color <= AnsiColor.White) {
+            code = cast(ubyte)(40 + (color - AnsiColor.Black));
+        } else if (color >= AnsiColor.BrightBlack && color <= AnsiColor.BrightWhite) {
+            code = cast(ubyte)(100 + (color - AnsiColor.BrightBlack));
+        } else {
+            return; // Should not happen with enum
+        }
+        writef("[%dm", code);
+        stdout.flush();
+    }
+    else version (Windows) {
+        WORD fgAttribute; // Temporary, to map from AnsiColor to generic color bits
+        switch (color) {
+            case AnsiColor.Black:         fgAttribute = 0; break;
+            case AnsiColor.Red:           fgAttribute = FOREGROUND_RED; break;
+            case AnsiColor.Green:         fgAttribute = FOREGROUND_GREEN; break;
+            case AnsiColor.Yellow:        fgAttribute = FOREGROUND_RED | FOREGROUND_GREEN; break;
+            case AnsiColor.Blue:          fgAttribute = FOREGROUND_BLUE; break;
+            case AnsiColor.Magenta:       fgAttribute = FOREGROUND_RED | FOREGROUND_BLUE; break;
+            case AnsiColor.Cyan:          fgAttribute = FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            case AnsiColor.White:         fgAttribute = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightBlack:   fgAttribute = FOREGROUND_INTENSITY; break;
+            case AnsiColor.BrightRed:     fgAttribute = FOREGROUND_INTENSITY | FOREGROUND_RED; break;
+            case AnsiColor.BrightGreen:   fgAttribute = FOREGROUND_INTENSITY | FOREGROUND_GREEN; break;
+            case AnsiColor.BrightYellow:  fgAttribute = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN; break;
+            case AnsiColor.BrightBlue:    fgAttribute = FOREGROUND_INTENSITY | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightMagenta: fgAttribute = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightCyan:    fgAttribute = FOREGROUND_INTENSITY | FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightWhite:   fgAttribute = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            default: return; // Should not happen
+        }
+
+        WORD bgAttribute = 0;
+        if (fgAttribute & FOREGROUND_RED)       bgAttribute |= BACKGROUND_RED;
+        if (fgAttribute & FOREGROUND_GREEN)     bgAttribute |= BACKGROUND_GREEN;
+        if (fgAttribute & FOREGROUND_BLUE)      bgAttribute |= BACKGROUND_BLUE;
+        if (fgAttribute & FOREGROUND_INTENSITY) bgAttribute |= BACKGROUND_INTENSITY;
+
+        _applyWindowsColor(bgAttribute, false); // false for background
     }
     else {
         // Unsupported platform
@@ -592,6 +665,53 @@ void setBackgroundColorRGB(ubyte r, ubyte g, ubyte b) {
         if (winColor & FOREGROUND_BLUE) bgWinColor |= BACKGROUND_BLUE;
         if (winColor & FOREGROUND_INTENSITY) bgWinColor |= BACKGROUND_INTENSITY;
         _applyWindowsColor(bgWinColor, false); // false for background
+    }
+    else {
+        // Unsupported platform
+    }
+}
+
+/**
+ * Sets the terminal's foreground color using one of the 16 standard ANSI colors.
+ * Params:
+ *   color = The AnsiColor enum value to set.
+ */
+public void setAnsiForegroundColor(AnsiColor color) {
+    version (Posix) {
+        if (!isatty(STDOUT_FILENO)) return;
+        ubyte code;
+        if (color >= AnsiColor.Black && color <= AnsiColor.White) {
+            code = cast(ubyte)(30 + (color - AnsiColor.Black));
+        } else if (color >= AnsiColor.BrightBlack && color <= AnsiColor.BrightWhite) {
+            code = cast(ubyte)(90 + (color - AnsiColor.BrightBlack));
+        } else {
+            return; // Should not happen with enum
+        }
+        writef("[%dm", code);
+        stdout.flush();
+    }
+    else version (Windows) {
+        WORD attribute;
+        switch (color) {
+            case AnsiColor.Black:         attribute = 0; break;
+            case AnsiColor.Red:           attribute = FOREGROUND_RED; break;
+            case AnsiColor.Green:         attribute = FOREGROUND_GREEN; break;
+            case AnsiColor.Yellow:        attribute = FOREGROUND_RED | FOREGROUND_GREEN; break;
+            case AnsiColor.Blue:          attribute = FOREGROUND_BLUE; break;
+            case AnsiColor.Magenta:       attribute = FOREGROUND_RED | FOREGROUND_BLUE; break;
+            case AnsiColor.Cyan:          attribute = FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            case AnsiColor.White:         attribute = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightBlack:   attribute = FOREGROUND_INTENSITY; break;
+            case AnsiColor.BrightRed:     attribute = FOREGROUND_INTENSITY | FOREGROUND_RED; break;
+            case AnsiColor.BrightGreen:   attribute = FOREGROUND_INTENSITY | FOREGROUND_GREEN; break;
+            case AnsiColor.BrightYellow:  attribute = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN; break;
+            case AnsiColor.BrightBlue:    attribute = FOREGROUND_INTENSITY | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightMagenta: attribute = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightCyan:    attribute = FOREGROUND_INTENSITY | FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            case AnsiColor.BrightWhite:   attribute = FOREGROUND_INTENSITY | FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; break;
+            default: return; // Should not happen
+        }
+        _applyWindowsColor(attribute, true); // true for foreground
     }
     else {
         // Unsupported platform

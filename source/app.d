@@ -73,6 +73,87 @@ void main() {
     writeln("Colors reset to default for this line.");
     writeln();
 
+    // --- ANSI 16 Color Demonstration ---
+    writeln("--- ANSI 16 Color Demonstration ---");
+    // Recalculate terminal size for this specific demo part, in case it changed or wasn't up-to-date
+    TerminalSize currentSizeForAnsiDemo = getTerminalSize();
+    if (currentSizeForAnsiDemo.rows > 1 && currentSizeForAnsiDemo.cols > 1) {
+        ushort ansiDemoStartRow = cast(ushort)(getCursorPosition().row + 1);
+        // Try to ensure there are at least ~15 lines for the demo, if possible
+        ushort requiredLinesForAnsiDemo = 20;
+        if (ansiDemoStartRow > currentSizeForAnsiDemo.rows - requiredLinesForAnsiDemo && currentSizeForAnsiDemo.rows > requiredLinesForAnsiDemo) {
+            ansiDemoStartRow = cast(ushort)(currentSizeForAnsiDemo.rows - requiredLinesForAnsiDemo);
+        } else if (ansiDemoStartRow >= currentSizeForAnsiDemo.rows) {
+             ansiDemoStartRow = cast(ushort)(currentSizeForAnsiDemo.rows > 1 ? currentSizeForAnsiDemo.rows -1 : 1);
+        }
+        setCursorPosition(ansiDemoStartRow, 1);
+    }
+
+    // Demonstrate normal colors
+    foreach (immutable AnsiColor color; [AnsiColor.Black, AnsiColor.Red, AnsiColor.Green, AnsiColor.Yellow, AnsiColor.Blue, AnsiColor.Magenta, AnsiColor.Cyan, AnsiColor.White]) {
+        setAnsiForegroundColor(color);
+        if (color == AnsiColor.Black) { // Black on default might be invisible
+            setAnsiBackgroundColor(AnsiColor.BrightWhite);
+            writefln("FG: %s on BrightWhite", color);
+        } else if (color == AnsiColor.White) {
+             setAnsiBackgroundColor(AnsiColor.Black);
+             writefln("FG: %s on Black", color);
+        }
+        else {
+            writefln("FG: %s", color);
+        }
+        resetColors(); // Reset for next line
+    }
+    writeln();
+
+    // Demonstrate bright colors
+    foreach (immutable AnsiColor color; [AnsiColor.BrightBlack, AnsiColor.BrightRed, AnsiColor.BrightGreen, AnsiColor.BrightYellow, AnsiColor.BrightBlue, AnsiColor.BrightMagenta, AnsiColor.BrightCyan, AnsiColor.BrightWhite]) {
+        setAnsiForegroundColor(color);
+         if (color == AnsiColor.BrightWhite) {
+             setAnsiBackgroundColor(AnsiColor.Black);
+             writefln("FG: %s on Black", color);
+        } else {
+            writefln("FG: %s", color);
+        }
+        resetColors(); // Reset for next line
+    }
+    writeln();
+
+    // Demonstrate background colors
+    setAnsiForegroundColor(AnsiColor.Black); // For visible text
+    foreach (immutable AnsiColor bgColor; [AnsiColor.Red, AnsiColor.BrightGreen, AnsiColor.Yellow, AnsiColor.BrightBlue]) {
+        setAnsiBackgroundColor(bgColor);
+        if (bgColor == AnsiColor.Yellow || bgColor == AnsiColor.BrightGreen) {
+            setAnsiForegroundColor(AnsiColor.Black);
+            writefln("BG: %s with Black text", bgColor);
+        } else {
+            setAnsiForegroundColor(AnsiColor.White);
+            writefln("BG: %s with White text", bgColor);
+        }
+        resetColors(); // Reset for next line
+    }
+
+    // Example of combined FG and BG
+    setAnsiForegroundColor(AnsiColor.BrightYellow);
+    setAnsiBackgroundColor(AnsiColor.Blue);
+    writeln("BrightYellow text on Blue background!");
+    resetColors();
+    writeln();
+
+    // Ensure cursor is visible and colors are reset for subsequent demos
+    resetColors();
+    // Update size and position info before deciding where to move for next demo
+    currentSizeForAnsiDemo = getTerminalSize();
+    CursorPosition currentPosAfterAnsiDemo = getCursorPosition();
+    if (currentPosAfterAnsiDemo.row >= currentSizeForAnsiDemo.rows -1 && currentSizeForAnsiDemo.rows > 0) {
+         setCursorPosition(currentSizeForAnsiDemo.rows, 1);
+    } else if (currentSizeForAnsiDemo.rows > 0 && currentSizeForAnsiDemo.cols > 0) {
+         setCursorPosition(cast(ushort)(currentPosAfterAnsiDemo.row + 1), 1);
+    }
+    // End of ANSI 16 Color Demonstration
+    writeln();
+
+
     // 4. Key Press Detection
     writeln("--- Key Press Detection Demo ---");
     writeln("Press any key to see its details. Press Escape or 'q' to exit this test (max 15 keys).");
