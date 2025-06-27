@@ -45,6 +45,109 @@ version (Posix) {
     import core.stdc.stdio : setvbuf, _IONBF, _IOLBF, _IOFBF; 
     import core.stdc.errno : errno;
 
+    private static bool _setTerminalRawMode(int fd, out termios originalTerm, ubyte vmin, ubyte vtime) {
+        if (!isatty(fd)) return false;
+        if (tcgetattr(fd, &originalTerm) == -1) {
+            return false;
+        }
+
+        termios rawTerm = originalTerm;
+        rawTerm.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+        rawTerm.c_oflag &= ~OPOST;
+        rawTerm.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+        rawTerm.c_cflag &= ~(CSIZE | PARENB);
+        rawTerm.c_cflag |= CS8;
+        rawTerm.c_cc[VMIN] = vmin;
+        rawTerm.c_cc[VTIME] = vtime;
+
+        if (tcsetattr(fd, TCSADRAIN, &rawTerm) == -1) {
+            return false;
+        }
+        return true;
+    }
+
+    private static void _restoreTerminalMode(int fd, const ref termios termSettings) {
+        tcsetattr(fd, TCSADRAIN, &termSettings);
+    }
+
+    private static KeyPress _parseCsiSequence(const ubyte* seqData, size_t len) {
+        KeyPress press;
+        press.key = Key.Unknown;
+        press.modifiers = KeyModifier.None;
+        press.character = '\0';
+
+        if (len == 1) { // Single character after ESC [
+            switch(seqData[0]) {
+                case 'A': press.key = Key.ArrowUp; return press;
+                case 'B': press.key = Key.ArrowDown; return press;
+                case 'C': press.key = Key.ArrowRight; return press;
+                case 'D': press.key = Key.ArrowLeft; return press;
+                case 'H': press.key = Key.Home; return press;
+                case 'F': press.key = Key.End; return press;
+                default: break;
+            }
+        } else if (len > 1 && seqData[len - 1] == '~') { // Numeric parameter ending with ~
+            ubyte param1 = 0;
+            // seqData points to character after '[', len is number of chars after '['
+            // e.g., for ESC[5~, seqData points to '5', len is 2.
+            // Parameter is from seqData[0] to seqData[len-2]
+            if (len - 1 > 0) { // Check if there is a number before ~
+                string numStr;
+                for (int i = 0; i < len - 1; i++) {
+                    if (seqData[i] >= '0' && seqData[i] <= '9') {
+                        numStr ~= cast(char)seqData[i];
+                    } else {
+                        numStr = ""; // Invalid number
+                        break;
+                    }
+                }
+                if (numStr.length > 0) {
+                     import std.conv : to;
+                     try { param1 = to!ubyte(numStr); } catch (Exception e) { /* ignore, param1 remains 0 */ }
+                }
+            }
+            switch (param1) {
+                case 1: press.key = Key.Home; return press;
+                case 2: press.key = Key.Insert; return press;
+                case 3: press.key = Key.Delete; return press;
+                case 4: press.key = Key.End; return press;
+                case 5: press.key = Key.PageUp; return press;
+                case 6: press.key = Key.PageDown; return press;
+                case 11: press.key = Key.F1; return press;
+                case 12: press.key = Key.F2; return press;
+                case 13: press.key = Key.F3; return press;
+                case 14: press.key = Key.F4; return press;
+                case 15: press.key = Key.F5; return press;
+                case 17: press.key = Key.F6; return press;
+                case 18: press.key = Key.F7; return press;
+                case 19: press.key = Key.F8; return press;
+                case 20: press.key = Key.F9; return press;
+                case 21: press.key = Key.F10; return press;
+                case 23: press.key = Key.F11; return press;
+                case 24: press.key = Key.F12; return press;
+                default: break;
+            }
+        }
+        return press; // Key.Unknown if not matched
+    }
+
+    private static KeyPress _parseSs3Sequence(const ubyte* seqData, size_t len) {
+        KeyPress press;
+        press.key = Key.Unknown;
+        press.modifiers = KeyModifier.None;
+        press.character = '\0';
+
+        if (len == 1) { // Single character after ESC O
+            switch(seqData[0]) {
+                case 'P': press.key = Key.F1; return press;
+                case 'Q': press.key = Key.F2; return press;
+                case 'R': press.key = Key.F3; return press;
+                case 'S': press.key = Key.F4; return press;
+                default: break;
+            }
+        }
+        return press; // Key.Unknown if not matched
+    }
 
 } else version (Windows) {
     import core.sys.windows.wincon;
@@ -52,6 +155,7 @@ version (Posix) {
     import core.sys.windows.windef;
     import core.sys.windows.winuser; 
 
+    private HANDLE g_stdoutHandle = INVALID_HANDLE_VALUE;
     private WORD defaultConsoleAttributes = 0;
     private bool defaultConsoleAttributesCaptured = false;
     private enum INVALID_COLOR_MAP = ushort.max;
@@ -107,9 +211,16 @@ version (Posix) {
         return color;
     }
 
+    private HANDLE _getStdoutHandle() {
+        if (g_stdoutHandle == INVALID_HANDLE_VALUE) {
+            g_stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        }
+        return g_stdoutHandle;
+    }
+
     private void captureDefaultConsoleAttributes() {
         if (!defaultConsoleAttributesCaptured) {
-            HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+            HANDLE stdoutHandle = _getStdoutHandle();
             if (stdoutHandle != INVALID_HANDLE_VALUE) {
                 CONSOLE_SCREEN_BUFFER_INFO csbi;
                 if (GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) {
@@ -125,6 +236,42 @@ version (Posix) {
             }
         }
     }
+
+    private void _applyWindowsColor(WORD attribute, bool isForeground) {
+        captureDefaultConsoleAttributes();
+        HANDLE stdoutHandle = _getStdoutHandle();
+        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
+
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
+
+        WORD newAttributes = csbi.wAttributes;
+        if (isForeground) {
+            newAttributes &= ~(FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY);
+            newAttributes |= attribute;
+        } else {
+            newAttributes &= ~(BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY);
+            newAttributes |= attribute;
+        }
+        SetConsoleTextAttribute(stdoutHandle, newAttributes);
+    }
+
+    private void _moveCursorRelative(short dX, short dY) {
+        HANDLE stdoutHandle = _getStdoutHandle();
+        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
+
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
+
+        COORD newPos = csbi.dwCursorPosition;
+        newPos.X += dX;
+        newPos.Y += dY;
+
+        if (newPos.X < 0) newPos.X = 0;
+        if (newPos.Y < 0) newPos.Y = 0;
+
+        SetConsoleCursorPosition(stdoutHandle, newPos);
+    }
 }
 
 // --- Screen Manipulation ---
@@ -135,7 +282,7 @@ public void clearScreen() {
         stdout.flush();
     }
     else version (Windows) {
-        HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE hConsole = _getStdoutHandle();
         if (hConsole == INVALID_HANDLE_VALUE) return;
 
         CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -170,7 +317,7 @@ TerminalSize getTerminalSize() {
         return TerminalSize(ws.ws_row, ws.ws_col);
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE stdoutHandle = _getStdoutHandle();
         if (stdoutHandle == INVALID_HANDLE_VALUE) {
             return TerminalSize(0, 0);
         }
@@ -198,7 +345,7 @@ void setCursorPosition(ushort row, ushort col) {
         stdout.flush();
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE stdoutHandle = _getStdoutHandle();
         if (stdoutHandle == INVALID_HANDLE_VALUE) {
             return; 
         }
@@ -218,14 +365,7 @@ void cursorUp(ushort count = 1) {
         stdout.flush();
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        COORD newPos = csbi.dwCursorPosition;
-        newPos.Y = cast(short)(newPos.Y - count);
-        if (newPos.Y < 0) newPos.Y = 0;
-        SetConsoleCursorPosition(stdoutHandle, newPos);
+        _moveCursorRelative(0, -cast(short)count);
     }
     else {
         // Unsupported platform
@@ -239,13 +379,7 @@ void cursorDown(ushort count = 1) {
         stdout.flush();
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        COORD newPos = csbi.dwCursorPosition;
-        newPos.Y = cast(short)(newPos.Y + count);
-        SetConsoleCursorPosition(stdoutHandle, newPos);
+        _moveCursorRelative(0, cast(short)count);
     }
     else {
         // Unsupported platform
@@ -259,13 +393,7 @@ void cursorForward(ushort count = 1) {
         stdout.flush();
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        COORD newPos = csbi.dwCursorPosition;
-        newPos.X = cast(short)(newPos.X + count);
-        SetConsoleCursorPosition(stdoutHandle, newPos);
+        _moveCursorRelative(cast(short)count, 0);
     }
     else {
         // Unsupported platform
@@ -279,14 +407,7 @@ void cursorBackward(ushort count = 1) {
         stdout.flush();
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        COORD newPos = csbi.dwCursorPosition;
-        newPos.X = cast(short)(newPos.X - count);
-        if (newPos.X < 0) newPos.X = 0;
-        SetConsoleCursorPosition(stdoutHandle, newPos);
+        _moveCursorRelative(-cast(short)count, 0);
     }
     else {
         // Unsupported platform
@@ -300,7 +421,7 @@ void saveCursorPosition() {
         stdout.flush();
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE stdoutHandle = _getStdoutHandle();
         if (stdoutHandle == INVALID_HANDLE_VALUE) return;
         CONSOLE_SCREEN_BUFFER_INFO csbi;
         if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
@@ -320,7 +441,7 @@ void restoreCursorPosition() {
     }
     else version (Windows) {
         if (!savedCursorPositionInitialized) return; 
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE stdoutHandle = _getStdoutHandle();
         if (stdoutHandle == INVALID_HANDLE_VALUE) return;
         SetConsoleCursorPosition(stdoutHandle, savedCursorPosition);
     }
@@ -331,27 +452,17 @@ void restoreCursorPosition() {
 
 CursorPosition getCursorPosition() {
     version (Posix) {
-        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+        if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) { // Combined check
             return CursorPosition(0, 0);
         }
-        termios originalTerm, rawTerm;
-        if (tcgetattr(STDIN_FILENO, &originalTerm) == -1) {
+
+        termios originalTerm;
+        // VMIN = 1, VTIME = 1 (100ms timeout for DSR response)
+        if (!_setTerminalRawMode(STDIN_FILENO, originalTerm, 1, 1)) {
             return CursorPosition(0, 0);
         }
-        rawTerm = originalTerm;
-        rawTerm.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-        rawTerm.c_oflag &= ~OPOST;
-        rawTerm.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-        rawTerm.c_cflag &= ~(CSIZE | PARENB);
-        rawTerm.c_cflag |= CS8;
-        rawTerm.c_cc[VMIN] = 1; 
-        rawTerm.c_cc[VTIME] = 1; 
-        if (tcsetattr(STDIN_FILENO, TCSADRAIN, &rawTerm) == -1) {
-            return CursorPosition(0, 0);
-        }
-        scope(exit) { 
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &originalTerm);
-        }
+        scope(exit) _restoreTerminalMode(STDIN_FILENO, originalTerm);
+
         writef("\033[6n");
         stdout.flush();
         char[32] buf = void; 
@@ -394,7 +505,7 @@ CursorPosition getCursorPosition() {
         }
     }
     else version (Windows) {
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE stdoutHandle = _getStdoutHandle();
         if (stdoutHandle == INVALID_HANDLE_VALUE) {
             return CursorPosition(0, 0);
         }
@@ -418,19 +529,11 @@ void setForegroundColor256(ubyte colorIndex) {
         stdout.flush();
     }
     else version (Windows) {
-        captureDefaultConsoleAttributes(); 
         WORD winColor = mapXterm256ToWindows16(colorIndex);
         if (winColor == INVALID_COLOR_MAP) {
             return; 
         }
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        WORD newAttributes = csbi.wAttributes;
-        newAttributes &= ~(FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY); 
-        newAttributes |= winColor; 
-        SetConsoleTextAttribute(stdoutHandle, newAttributes);
+        _applyWindowsColor(winColor, true); // true for foreground
     }
     else {
         // Unsupported platform
@@ -444,24 +547,16 @@ void setBackgroundColor256(ubyte colorIndex) {
         stdout.flush();
     }
     else version (Windows) {
-        captureDefaultConsoleAttributes();
         WORD winColor = mapXterm256ToWindows16(colorIndex); 
         if (winColor == INVALID_COLOR_MAP) {
             return;
         }
-        WORD bgWinColor = 0;
+        WORD bgWinColor = 0; // Convert foreground flags to background flags
         if (winColor & FOREGROUND_RED) bgWinColor |= BACKGROUND_RED;
         if (winColor & FOREGROUND_GREEN) bgWinColor |= BACKGROUND_GREEN;
         if (winColor & FOREGROUND_BLUE) bgWinColor |= BACKGROUND_BLUE;
         if (winColor & FOREGROUND_INTENSITY) bgWinColor |= BACKGROUND_INTENSITY;
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        WORD newAttributes = csbi.wAttributes;
-        newAttributes &= ~(BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY); 
-        newAttributes |= bgWinColor; 
-        SetConsoleTextAttribute(stdoutHandle, newAttributes);
+        _applyWindowsColor(bgWinColor, false); // false for background
     }
     else {
         // Unsupported platform
@@ -475,16 +570,8 @@ void setForegroundColorRGB(ubyte r, ubyte g, ubyte b) {
         stdout.flush();
     }
     else version (Windows) {
-        captureDefaultConsoleAttributes();
         WORD winColor = mapRGBToWindows16(r, g, b);
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        WORD newAttributes = csbi.wAttributes;
-        newAttributes &= ~(FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY);
-        newAttributes |= winColor;
-        SetConsoleTextAttribute(stdoutHandle, newAttributes);
+        _applyWindowsColor(winColor, true); // true for foreground
     }
     else {
         // Unsupported platform
@@ -498,21 +585,13 @@ void setBackgroundColorRGB(ubyte r, ubyte g, ubyte b) {
         stdout.flush();
     }
     else version (Windows) {
-        captureDefaultConsoleAttributes();
         WORD winColor = mapRGBToWindows16(r, g, b); 
-        WORD bgWinColor = 0;
+        WORD bgWinColor = 0; // Convert foreground flags to background flags
         if (winColor & FOREGROUND_RED) bgWinColor |= BACKGROUND_RED;
         if (winColor & FOREGROUND_GREEN) bgWinColor |= BACKGROUND_GREEN;
         if (winColor & FOREGROUND_BLUE) bgWinColor |= BACKGROUND_BLUE;
         if (winColor & FOREGROUND_INTENSITY) bgWinColor |= BACKGROUND_INTENSITY;
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (stdoutHandle == INVALID_HANDLE_VALUE) return;
-        CONSOLE_SCREEN_BUFFER_INFO csbi;
-        if (!GetConsoleScreenBufferInfo(stdoutHandle, &csbi)) return;
-        WORD newAttributes = csbi.wAttributes;
-        newAttributes &= ~(BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY);
-        newAttributes |= bgWinColor;
-        SetConsoleTextAttribute(stdoutHandle, newAttributes);
+        _applyWindowsColor(bgWinColor, false); // false for background
     }
     else {
         // Unsupported platform
@@ -527,7 +606,7 @@ void resetColors() {
     }
     else version (Windows) {
         captureDefaultConsoleAttributes(); 
-        HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        HANDLE stdoutHandle = _getStdoutHandle();
         if (stdoutHandle == INVALID_HANDLE_VALUE) return;
         SetConsoleTextAttribute(stdoutHandle, defaultConsoleAttributes);
     }
@@ -540,31 +619,12 @@ void resetColors() {
 // --- Key Input Function ---
 public KeyPress getKeyPress() {
     version (Posix) {
-        if (!isatty(STDIN_FILENO)) {
-            return KeyPress(Key.Unknown, '\0', KeyModifier.None);
+        termios originalTerm;
+        // VMIN = 1, VTIME = 0 (blocking read for a single key)
+        if (!_setTerminalRawMode(STDIN_FILENO, originalTerm, 1, 0)) {
+             return KeyPress(Key.Unknown, '\0', KeyModifier.None);
         }
-
-        termios originalTerm, rawTerm;
-        if (tcgetattr(STDIN_FILENO, &originalTerm) == -1) {
-            return KeyPress(Key.Unknown, '\0', KeyModifier.None);
-        }
-
-        rawTerm = originalTerm;
-        rawTerm.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-        rawTerm.c_oflag &= ~OPOST;
-        rawTerm.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-        rawTerm.c_cflag &= ~(CSIZE | PARENB);
-        rawTerm.c_cflag |= CS8;
-        rawTerm.c_cc[VMIN] = 1;  
-        rawTerm.c_cc[VTIME] = 0; 
-
-        if (tcsetattr(STDIN_FILENO, TCSADRAIN, &rawTerm) == -1) {
-            return KeyPress(Key.Unknown, '\0', KeyModifier.None);
-        }
-
-        scope(exit) {
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &originalTerm);
-        }
+        scope(exit) _restoreTerminalMode(STDIN_FILENO, originalTerm);
 
         ubyte[6] seqBuf; 
         ssize_t nread;
@@ -575,97 +635,54 @@ public KeyPress getKeyPress() {
         KeyPress press;
         press.modifiers = KeyModifier.None;
 
-        if (seqBuf[0] == 0x1B) { 
+        if (seqBuf[0] == 0x1B) { // Escape sequence
             int oldFlags = fcntl(STDIN_FILENO, F_GETFL, 0);
             fcntl(STDIN_FILENO, F_SETFL, oldFlags | O_NONBLOCK);
+            // Try to read the rest of the sequence. seqBuf[0] is ESC.
+            // nextNread is number of bytes read *after* ESC.
             ssize_t nextNread = read(STDIN_FILENO, seqBuf.ptr + 1, seqBuf.length - 1);
             fcntl(STDIN_FILENO, F_SETFL, oldFlags);
 
-            if (nextNread <= 0) { 
+            if (nextNread <= 0) { // Just ESC key pressed
                 press.key = Key.Escape;
                 return press;
             }
-            size_t seqLen = 1 + nextNread;
 
+            // nextNread is the length of the sequence part starting from seqBuf[1]
+            // seqBuf[1] is the char after ESC.
+            // For _parseCsiSequence and _parseSs3Sequence, data starts from seqBuf[2]
+            // and length is nextNread - 1.
             if (seqBuf[1] == '[') { 
-                if (seqLen == 3) { 
-                    switch(seqBuf[2]) {
-                        case 'A': press.key = Key.ArrowUp; return press;
-                        case 'B': press.key = Key.ArrowDown; return press;
-                        case 'C': press.key = Key.ArrowRight; return press;
-                        case 'D': press.key = Key.ArrowLeft; return press;
-                        case 'H': press.key = Key.Home; return press;
-                        case 'F': press.key = Key.End; return press; 
-                        default: break; 
-                    }
-                } else if (seqBuf[seqLen - 1] == '~') { 
-                    ubyte param1 = 0;
-                    int paramStart = 2;
-                    int paramEnd = cast(int)seqLen - 2;
-                    if (paramStart <= paramEnd) {
-                        string numStr;
-                        for (int i = paramStart; i <= paramEnd; i++) {
-                            if (seqBuf[i] >= '0' && seqBuf[i] <= '9') {
-                                numStr ~= cast(char)seqBuf[i];
-                            } else { 
-                                numStr = ""; 
-                                break;
-                            }
-                        }
-                        if (numStr.length > 0) {
-                             import std.conv : to;
-                             try { param1 = to!ubyte(numStr); } catch (Exception e) { }
-                        }
-                    }
-                    switch (param1) {
-                        case 1: press.key = Key.Home; return press; 
-                        case 2: press.key = Key.Insert; return press;
-                        case 3: press.key = Key.Delete; return press;
-                        case 4: press.key = Key.End; return press;    
-                        case 5: press.key = Key.PageUp; return press;
-                        case 6: press.key = Key.PageDown; return press;
-                        case 11: press.key = Key.F1; return press; 
-                        case 12: press.key = Key.F2; return press;
-                        case 13: press.key = Key.F3; return press;
-                        case 14: press.key = Key.F4; return press;
-                        case 15: press.key = Key.F5; return press; 
-                        case 17: press.key = Key.F6; return press; 
-                        case 18: press.key = Key.F7; return press;
-                        case 19: press.key = Key.F8; return press;
-                        case 20: press.key = Key.F9; return press;
-                        case 21: press.key = Key.F10; return press;
-                        case 23: press.key = Key.F11; return press;
-                        case 24: press.key = Key.F12; return press;
-                        default: break;
-                    }
+                if (nextNread > 1) { // Need at least one char after '['
+                    return _parseCsiSequence(seqBuf.ptr + 2, cast(size_t)(nextNread - 1));
+                } else { // Just ESC [
+                    press.key = Key.Unknown; return press;
                 }
-                press.key = Key.Unknown; 
-                return press;
-
-            } else if (seqBuf[1] == 'O') { 
-                 if (seqLen == 3) {
-                    switch(seqBuf[2]) {
-                        case 'P': press.key = Key.F1; return press;
-                        case 'Q': press.key = Key.F2; return press;
-                        case 'R': press.key = Key.F3; return press;
-                        case 'S': press.key = Key.F4; return press;
-                        default: break;
-                    }
+            } else if (seqBuf[1] == 'O') {
+                 if (nextNread > 1) { // Need at least one char after 'O'
+                    return _parseSs3Sequence(seqBuf.ptr + 2, cast(size_t)(nextNread - 1));
+                } else { // Just ESC O
+                    press.key = Key.Unknown; return press;
                 }
-                 press.key = Key.Unknown; return press; 
-            } else { 
+            } else { // Alt + character or other sequence not starting with [ or O
                 press.key = Key.Char;
-                press.character = cast(char)seqBuf[1];
+                press.character = cast(char)seqBuf[1]; // The character after ESC
                 press.modifiers = KeyModifier.Alt;
-                if (seqBuf[1] > 0 && seqBuf[1] < 0x1B && seqBuf[1] != '\t' && seqBuf[1] != '\n' && seqBuf[1] != '\r') {
+                // Check if it's also a control character (e.g., Alt+Ctrl+a)
+                // This logic is simplified; typically Alt+Ctrl sequences might have different byte patterns
+                // or might not be distinguishable from Alt + (non-printable char) this way.
+                // The original logic for Alt+Ctrl seems to map Alt+(control_char_value)
+                if (seqBuf[1] > 0 && seqBuf[1] < 0x1F && seqBuf[1] != '\t' && seqBuf[1] != '\n' && seqBuf[1] != '\r' && seqBuf[1] != 0x1B /*ESC itself*/) {
                      press.modifiers |= KeyModifier.Control;
+                     // Attempt to map to a letter if it's in the Ctrl+A to Ctrl+Z range
                      if (seqBuf[1] >= 1 && seqBuf[1] <= 26) {
                          press.character = cast(char)('a' + seqBuf[1] - 1);
                      }
+                     // Otherwise, character remains the control character code
                 }
                 return press;
             }
-        } else { 
+        } else { // Not an escape sequence, plain character
             press.character = cast(char)seqBuf[0];
             if (seqBuf[0] == '\r' || seqBuf[0] == '\n') { 
                 press.key = Key.Enter;
